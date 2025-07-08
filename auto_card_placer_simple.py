@@ -9,6 +9,7 @@ from tkinter import messagebox, simpledialog
 import threading
 import pygetwindow as gw
 import re
+import json
 
 # Configure pyautogui for non-admin operation
 pyautogui.FAILSAFE = True
@@ -61,7 +62,7 @@ card_data = {
     "Goblins.png": {"elixir": 2, "class": ["assassin", "goblin"]},
     "SkeletonKing.png": {"elixir": 3, "class": ["tank", "skeleton/undead"]},
     "GoldenKnight.png": {"elixir": 2, "class": ["assassin", "champion"]},
-    "ArcherQueen.png": {"elixir": 5, "class": ["avenger", "clan"]},
+    "ArcherQueen.png": {"elixir": 2, "class": ["avenger", "clan"]},
 }
 
 # --- GLOBAL VARIABLES ---
@@ -72,6 +73,30 @@ calibrated_elixir_roi = None  # x, y, w, h within window for elixir
 calibrated_cards_roi = None   # x, y, w, h within window for cards area
 win_border = 0
 title_bar = 0
+ROI_CONFIG_FILE = "roi_config.json"
+
+# --- ROI PERSISTENCE HELPERS ---
+def save_roi_config():
+    data = {
+        "elixir_roi": calibrated_elixir_roi,
+        "cards_roi": calibrated_cards_roi
+    }
+    with open(ROI_CONFIG_FILE, "w") as f:
+        json.dump(data, f)
+    print(f"Saved ROI config to {ROI_CONFIG_FILE}")
+
+def load_roi_config():
+    global calibrated_elixir_roi, calibrated_cards_roi
+    try:
+        with open(ROI_CONFIG_FILE, "r") as f:
+            data = json.load(f)
+            calibrated_elixir_roi = tuple(data["elixir_roi"]) if data["elixir_roi"] else None
+            calibrated_cards_roi = tuple(data["cards_roi"]) if data["cards_roi"] else None
+        print(f"Loaded ROI config from {ROI_CONFIG_FILE}: elixir={calibrated_elixir_roi}, cards={calibrated_cards_roi}")
+    except Exception as e:
+        print(f"No ROI config loaded: {e}")
+
+load_roi_config()
 
 # --- CARD DETECTION HELPERS ---
 def load_card_references():
@@ -458,6 +483,7 @@ def visual_calibrate_elixir():
         orig_h = int(h / display_scale)
         calibrated_elixir_roi = (orig_x, orig_y, orig_w, orig_h)
         print(f"Elixir ROI calibrated to: {calibrated_elixir_roi}")
+        save_roi_config()
         messagebox.showinfo("Success", f"Elixir ROI set to {calibrated_elixir_roi}")
         win.destroy()
 
@@ -714,6 +740,7 @@ def visual_calibrate_cards():
         orig_h = int(h / display_scale)
         calibrated_cards_roi = (orig_x, orig_y, orig_w, orig_h)
         print(f"Cards ROI calibrated to: {calibrated_cards_roi}")
+        save_roi_config()
         messagebox.showinfo("Success", f"Card ROI calibrated: {calibrated_cards_roi}")
         win.destroy()
     
@@ -801,12 +828,22 @@ def automation_thread():
     stop_event.clear()
     print("=== AUTOMATION STARTED ===")
     
+    # Step 1: Find and click battle button before anything else
+    print("Looking for Battle button...")
+    battle_clicked = find_and_click_battle_button()
+    if not battle_clicked:
+        print("Battle button not found. Proceeding to automation anyway.")
+    
     while not stop_event.is_set():
         if not selected_window or not mouse_control_active:
             time.sleep(1)
             continue
         try:
             el = get_current_elixir()
+            if el == 0:
+                print("Elixir is 0, skipping card click.")
+                time.sleep(0.5)
+                continue
             playable = find_playable_cards(el)
             if not playable:
                 time.sleep(0.5)
@@ -850,6 +887,49 @@ def start_automation():
 
 def stop_automation():
     stop_event.set()
+
+def find_and_click_battle_button():
+    battle_btn_path = os.path.join("Screenshots", "BattleButton.png")
+    if not os.path.exists(battle_btn_path):
+        print(f"Battle button template not found at {battle_btn_path}")
+        return False
+    tpl = cv2.imread(battle_btn_path)
+    if tpl is None:
+        print(f"Failed to load battle button template: {battle_btn_path}")
+        return False
+    tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY)
+    screen = pyautogui.screenshot()
+    screen_bgr = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
+    screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+    found = None
+    for scale in np.linspace(0.7, 1.3, 20)[::-1]:
+        new_w = int(tpl_gray.shape[1] * scale)
+        new_h = int(tpl_gray.shape[0] * scale)
+        if new_h > screen_gray.shape[0] or new_w > screen_gray.shape[1]:
+            continue
+        resized_tpl = cv2.resize(tpl_gray, (new_w, new_h))
+        try:
+            res = cv2.matchTemplate(screen_gray, resized_tpl, cv2.TM_CCOEFF_NORMED)
+            _, maxv, _, maxl = cv2.minMaxLoc(res)
+            if found is None or maxv > found[0]:
+                found = (maxv, maxl, new_w, new_h)
+        except Exception as e:
+            print(f"Error in matchTemplate for battle button at scale {scale:.2f}: {e}")
+            continue
+    if found is not None:
+        maxv, maxl, w, h = found
+        print(f"Battle button: max confidence = {maxv:.3f}")
+        if maxv >= 0.7:
+            center_pos = (maxl[0] + w // 2, maxl[1] + h // 2)
+            pyautogui.click(center_pos)
+            print(f"Clicked Battle button at {center_pos}")
+            time.sleep(1)
+            return True
+        else:
+            print("Battle button not found with high enough confidence.")
+    else:
+        print("Battle button: no valid match found")
+    return False
 
 root = tk.Tk()
 root.title("Card Placer")
