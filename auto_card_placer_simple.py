@@ -108,16 +108,12 @@ def preprocess_elixir_image(img):
     return thresh
 
 def detect_elixir_from_templates(img):
-    """Detect elixir using template matching with pre-processed reference images"""
     if not elixir_references:
         print("No elixir references loaded. Cannot detect elixir.")
         return 10
-    
     processed_img = preprocess_elixir_image(img)
-    
     best_confidence = 0
-    best_elixir = 10 
-    
+    best_elixir = 10
     for elixir_count, reference_img in elixir_references.items():
         try:
             processed_ref = preprocess_elixir_image(reference_img)
@@ -125,26 +121,24 @@ def detect_elixir_from_templates(img):
             for scale in np.linspace(0.8, 1.2, 20):
                 h, w = processed_ref.shape[:2]
                 new_h, new_w = int(h * scale), int(w * scale)
-                
-                if new_h > processed_img.shape[0] or new_w > processed_img.shape[1]:
-                    continue
-                
                 resized_ref = cv2.resize(processed_ref, (new_w, new_h))
+                # Bulletproof: skip if template is non-positive or larger than ROI
+                if resized_ref.shape[0] <= 0 or resized_ref.shape[1] <= 0:
+                    continue
+                if processed_img.shape[0] < resized_ref.shape[0] or processed_img.shape[1] < resized_ref.shape[1]:
+                    # print(f"[Elixir] Skipping: ROI ({processed_img.shape}) < template ({resized_ref.shape})")
+                    continue
                 result = cv2.matchTemplate(processed_img, resized_ref, cv2.TM_CCOEFF_NORMED)
                 _, confidence, _, _ = cv2.minMaxLoc(result)
-                
                 if confidence > max_confidence_for_digit:
                     max_confidence_for_digit = confidence
-            
             if max_confidence_for_digit > best_confidence:
                 best_confidence = max_confidence_for_digit
                 best_elixir = elixir_count
-                
         except Exception as e:
             print(f"Error matching elixir {elixir_count}: {e}")
             continue
-    
-    if best_confidence > 0.60:  # Lowered threshold from 0.80 to 0.60
+    if best_confidence > 0.60:
         print(f"Template matching detected elixir: {best_elixir} (confidence: {best_confidence:.3f})")
         return best_elixir
     else:
@@ -437,10 +431,11 @@ def test_template_matching():
                     continue
                 
                 resized_ref = cv2.resize(processed_ref, (new_w, new_h))
-                result = cv2.matchTemplate(processed_img, resized_ref, cv2.TM_CCOEFF_NORMED)
-                _, confidence, _, _ = cv2.minMaxLoc(result)
-                if confidence > max_confidence:
-                    max_confidence = confidence
+                if processed_img.shape[0] >= resized_ref.shape[0] and processed_img.shape[1] >= resized_ref.shape[1] and resized_ref.shape[0] > 0 and resized_ref.shape[1] > 0:
+                    result = cv2.matchTemplate(processed_img, resized_ref, cv2.TM_CCOEFF_NORMED)
+                    _, confidence, _, _ = cv2.minMaxLoc(result)
+                    if confidence > max_confidence:
+                        max_confidence = confidence
 
             results.append((elixir_count, max_confidence))
         
@@ -467,52 +462,108 @@ def test_template_matching():
         print(error_msg)
         messagebox.showerror("Error", error_msg)
 
+# --- CARD DETECTION HELPERS ---
+def load_card_references():
+    """Load reference card images for template matching"""
+    references = {}
+    card_dir = "Screenshots/Cards"
+    if not os.path.isdir(card_dir):
+        print(f"WARNING: Card reference directory not found at '{card_dir}'")
+        return references
+    for fname in os.listdir(card_dir):
+        if fname.lower().endswith('.jpg'):
+            path = os.path.join(card_dir, fname)
+            img = cv2.imread(path)
+            if img is not None:
+                references[fname] = img
+            else:
+                print(f"Failed to load: {path}")
+    return references
+
+card_references = load_card_references()
+
+def preprocess_card_image(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    return gray
+
+card_confidence_threshold = 0.4
+
+def match_templates(region_img, card_list):
+    matches = []
+    processed_img = preprocess_card_image(region_img)
+    for name, cost in card_list:
+        ref_img = card_references.get(name)
+        if ref_img is None:
+            continue
+        best_conf = 0
+        best_pos = (0, 0)
+        best_scale = 1.0
+        best_w, best_h = 0, 0
+        try:
+            processed_ref = preprocess_card_image(ref_img)
+            for scale in np.linspace(0.7, 1.3, 15)[::-1]:
+                h, w = processed_ref.shape[:2]
+                new_h, new_w = int(h * scale), int(w * scale)
+                resized_ref = cv2.resize(processed_ref, (new_w, new_h))
+                if resized_ref.shape[0] <= 0 or resized_ref.shape[1] <= 0:
+                    continue
+                if processed_img.shape[0] < resized_ref.shape[0] or processed_img.shape[1] < resized_ref.shape[1]:
+                    continue
+                result = cv2.matchTemplate(processed_img, resized_ref, cv2.TM_CCOEFF_NORMED)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+                if max_val > best_conf:
+                    best_conf = max_val
+                    best_pos = (max_loc[0] + new_w // 2, max_loc[1] + new_h // 2)
+                    best_scale = scale
+                    best_w, best_h = new_w, new_h
+            # Always append the best match for this card, even if below threshold
+            matches.append((name, best_conf, best_pos, cost, best_scale, best_w, best_h))
+            if best_conf < 0.2:
+                print(f"[Card] Very low confidence for {name}: {best_conf:.3f}")
+        except Exception as e:
+            print(f"Error matching template {name}: {e}")
+    return matches
+
 def test_card_roi():
-    """Test card ROI detection"""
+    """Test card ROI detection with template matching and show all found cards, always showing the closest match."""
     if not selected_window:
         messagebox.showwarning("Warning", "Please select a window first!")
         return
-    
     try:
         left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
-        
         if calibrated_cards_roi:
             x, y, w, h = calibrated_cards_roi
             print(f"Using calibrated card ROI: {calibrated_cards_roi}")
         else:
             x, y, w, h = 0, 0, width, height
             print(f"Using default card ROI (full window): ({x}, {y}, {w}, {h})")
-        
         screenshot = pyautogui.screenshot(region=(left + x, top + y, w, h))
         img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
-        
         cv2.imwrite('debug_cards_roi.png', img)
-        
-        current_elixir = get_current_elixir()
-        playable_cards = find_playable_cards(current_elixir)
-        
-        if playable_cards:
-            matches = match_templates(img, playable_cards)
-            
-            message = f"Card ROI Test Results:\n\n"
-            message += f"ROI: ({x}, {y}, {w}, {h})\n"
-            message += f"Current Elixir: {current_elixir}\n"
-            message += f"Playable Cards Checked: {len(playable_cards)}\n"
-            message += f"Matches Found: {len(matches)}\n\n"
-            
-            if matches:
-                message += "Top matches:\n"
-                matches.sort(key=lambda item: item[1], reverse=True)
-                for i, (name, confidence, pos, cost) in enumerate(matches[:5]):
-                    message += f"{i+1}. {name.replace('.jpg', '')} (conf: {confidence:.3f})\n"
+        playable_cards = [(name, card_data[name]["elixir"]) for name in card_references if name in card_data]
+        matches = match_templates(img, playable_cards)
+        matches.sort(key=lambda item: item[1], reverse=True)
+        message = f"Card ROI Test Results (Closest Match):\n\n"
+        message += f"ROI: ({x}, {y}, {w}, {h})\n"
+        message += f"Reference Images Loaded: {len(card_references)}\n"
+        message += f"Cards Checked: {len(playable_cards)}\n"
+        if matches:
+            best_name, best_conf, best_pos, best_cost, best_scale, best_w, best_h = matches[0]
+            message += f"\nBest Match: {best_name.replace('.jpg','')}\n"
+            message += f"  Confidence: {best_conf:.3f}\n  Position: {best_pos}\n  Elixir: {best_cost}\n  Scale: {best_scale:.2f}\n  Template Size: ({best_w}x{best_h})\n"
+            if best_conf > 0.4:
+                message += "  Status: ✓ Good match\n"
             else:
-                message += "No card matches found in ROI"
-            
-            message += f"\nDebug image saved: debug_cards_roi.png"
-            show_scrollable_message("Card ROI Test Results", message)
+                message += "  Status: ✗ Low confidence match\n"
+            message += "\nAll Card Confidences (Top 10):\n"
+            message += "-" * 40 + "\n"
+            for i, (name, conf, pos, cost, scale, w, h) in enumerate(matches[:10]):
+                message += f"{i+1}. {name.replace('.jpg','')}: {conf:.3f} at {pos} (elixir: {cost})\n"
         else:
-            messagebox.showinfo("Card ROI Test", "No playable cards found for current elixir level")
-            
+            message += "No card matches found in ROI.\n"
+        message += f"\nDebug image saved: debug_cards_roi.png"
+        show_scrollable_message("Card ROI Test Results", message)
     except Exception as e:
         error_msg = f"Error testing card ROI: {str(e)}"
         print(error_msg)
@@ -589,34 +640,6 @@ def find_playable_cards(current_elixir):
     cards.sort(key=lambda x: priorities.get(x[0], 999))
     return cards
 
-def match_templates(region_img, card_list):
-    matches = []
-    for name, cost in card_list:
-        if not os.path.exists(name): continue
-        try:
-            tpl = cv2.imread(name)
-            if tpl is None: continue
-
-            found = None
-            for scale in np.linspace(0.8, 1.2, 20)[::-1]:
-                resized_tpl = cv2.resize(tpl, (int(tpl.shape[1] * scale), int(tpl.shape[0] * scale)))
-                if resized_tpl.shape[0] > region_img.shape[0] or resized_tpl.shape[1] > region_img.shape[1]:
-                    continue
-
-                res = cv2.matchTemplate(region_img, resized_tpl, cv2.TM_CCOEFF_NORMED)
-                _, maxv, _, maxl = cv2.minMaxLoc(res)
-
-                if found is None or maxv > found[0]:
-                    found = (maxv, maxl, resized_tpl.shape[1], resized_tpl.shape[0])
-
-            maxv, maxl, w, h = found
-            if maxv >= confidence_threshold:
-                center_pos = (maxl[0] + w // 2, maxl[1] + h // 2)
-                matches.append((name, maxv, center_pos, cost))
-        except Exception as e:
-            print(f"Error matching template {name}: {e}")
-    return matches
-
 def take_mouse_control():
     global mouse_control_active
     mouse_control_active = True
@@ -636,9 +659,9 @@ def click_card(pos):
         ox += cx; oy += cy
     abs_x = ox + pos[0]
     abs_y = oy + pos[1]
-    
     try:
-        selected_window.activate(); time.sleep(0.1)
+        selected_window.activate()
+        time.sleep(0.1)
         pyautogui.click(abs_x, abs_y)
         print(f"Clicked card at ({abs_x},{abs_y})")
         return True
@@ -684,7 +707,7 @@ def automation_thread():
                 if click_card(best[2]):
                     time.sleep(1)
             
-            time.sleep(1)
+                time.sleep(1)
         except Exception as e:
             print(f"Error in automation thread: {e}")
             time.sleep(2)
