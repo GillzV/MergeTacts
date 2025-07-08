@@ -915,22 +915,71 @@ def find_and_click_battle_button():
             if found is None or maxv > found[0]:
                 found = (maxv, maxl, new_w, new_h)
         except Exception as e:
-            print(f"Error in matchTemplate for battle button at scale {scale:.2f}: {e}")
             continue
     if found is not None:
         maxv, maxl, w, h = found
-        print(f"Battle button: max confidence = {maxv:.3f}")
         if maxv >= 0.7:
             center_pos = (maxl[0] + w // 2, maxl[1] + h // 2)
             pyautogui.click(center_pos)
-            print(f"Clicked Battle button at {center_pos}")
+            print(f"Clicked Battle button at {center_pos} (confidence={maxv:.3f})")
             time.sleep(1)
             return True
-        else:
-            print("Battle button not found with high enough confidence.")
-    else:
-        print("Battle button: no valid match found")
     return False
+
+def find_and_click_button(template_path, name, confidence=0.7):
+    if not os.path.exists(template_path):
+        return False
+    tpl = cv2.imread(template_path)
+    if tpl is None:
+        return False
+    tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY)
+    screen = pyautogui.screenshot()
+    screen_bgr = cv2.cvtColor(np.array(screen), cv2.COLOR_RGB2BGR)
+    screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+    found = None
+    for scale in np.linspace(0.7, 1.3, 20)[::-1]:
+        new_w = int(tpl_gray.shape[1] * scale)
+        new_h = int(tpl_gray.shape[0] * scale)
+        if new_h > screen_gray.shape[0] or new_w > screen_gray.shape[1]:
+            continue
+        resized_tpl = cv2.resize(tpl_gray, (new_w, new_h))
+        try:
+            res = cv2.matchTemplate(screen_gray, resized_tpl, cv2.TM_CCOEFF_NORMED)
+            _, maxv, _, maxl = cv2.minMaxLoc(res)
+            if found is None or maxv > found[0]:
+                found = (maxv, maxl, new_w, new_h)
+        except Exception as e:
+            continue
+    if found is not None:
+        maxv, maxl, w, h = found
+        # Require 0.7 confidence for PlayAgainButton and BattleButton, else use provided confidence
+        required_conf = 0.7 if name in ["PlayAgainButton", "BattleButton"] else confidence
+        if maxv >= required_conf:
+            center_pos = (maxl[0] + w // 2, maxl[1] + h // 2)
+            pyautogui.click(center_pos)
+            print(f"Clicked {name} at {center_pos} (confidence={maxv:.3f})")
+            time.sleep(1)
+            return True
+    return False
+
+def periodic_button_clicker():
+    print("Periodic button clicker started.")
+    while not periodic_stop_event.is_set():
+        for btn_name, btn_file in [
+            ("PlayAgainButton", os.path.join("Screenshots", "PlayAgainButton.png")),
+            ("QuitButton", os.path.join("Screenshots", "QuitButton.png")),
+            ("GoblinClick", os.path.join("Screenshots", "GoblinClick.png")),
+        ]:
+            # Use 0.7 confidence for PlayAgainButton and BattleButton, else default
+            conf = 0.7 if btn_name in ["PlayAgainButton", "BattleButton"] else 0.7
+            find_and_click_button(btn_file, btn_name, confidence=conf)
+            if periodic_stop_event.is_set():
+                break
+        # Wait 2 seconds or until stopped
+        for _ in range(2):
+            if periodic_stop_event.is_set():
+                break
+            time.sleep(1)
 
 root = tk.Tk()
 root.title("Card Placer")
