@@ -967,6 +967,7 @@ def periodic_button_clicker():
     while not periodic_stop_event.is_set():
         for btn_name, btn_file in [
             ("PlayAgainButton", os.path.join("Screenshots", "PlayAgainButton.png")),
+            ("BattleButton", os.path.join("Screenshots", "BattleButton.png")),
             ("QuitButton", os.path.join("Screenshots", "QuitButton.png")),
             ("GoblinClick", os.path.join("Screenshots", "GoblinClick.png")),
         ]:
