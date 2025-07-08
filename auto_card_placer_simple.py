@@ -38,30 +38,30 @@ priorities = {
     "Valkyrie.png": 5,
 }
 # Adjusted confidence threshold for better matching
-confidence_threshold = 0.1
+confidence_threshold = 0.2
 
 # Card metadata: elixir cost for each card
 card_data = {
-    "Knight.png": {"elixir": 3, "class": "tank"},
-    "Archers.png": {"elixir": 3, "class": "ranged"},
-    "SpearGoblins.png": {"elixir": 2, "class": "ranged"},
-    "GoblinMachine.png": {"elixir": 2, "class": "tank"},
-    "Bomber.png": {"elixir": 3, "class": "splash"},
-    "Barbarians.png": {"elixir": 5, "class": "swarm"},
-    "Valkyrie.png": {"elixir": 4, "class": "splash"},
-    "PEKKA.png": {"elixir": 7, "class": "tank"},
-    "Prince.png": {"elixir": 5, "class": "charge"},
-    "GiantSkeleton.png": {"elixir": 6, "class": "tank"},
-    "DartGoblin.png": {"elixir": 3, "class": "ranged"},
-    "Executioner.png": {"elixir": 5, "class": "splash"},
-    "Princess.png": {"elixir": 3, "class": "ranged"},
-    "MegaKnight.png": {"elixir": 7, "class": "tank"},
-    "RoyalGhost.png": {"elixir": 3, "class": "assassin"},
-    "Bandit.png": {"elixir": 3, "class": "assassin"},
-    "Goblins.png": {"elixir": 2, "class": "swarm"},
-    "SkeletonKing.png": {"elixir": 4, "class": "tank"},
-    "GoldenKnight.png": {"elixir": 4, "class": "champion"},
-    "ArcherQueen.png": {"elixir": 5, "class": "ranged"},
+    "Knight.png": {"elixir": 3, "class": ["tank", "champion"]},
+    "Archers.png": {"elixir": 4, "class": ["ranged", "clan"]},
+    "SpearGoblins.png": {"elixir": 4, "class": ["thrower", "goblin"]},
+    "GoblinMachine.png": {"elixir": 2, "class": ["tank", "goblin"]},
+    "Bomber.png": {"elixir": 5, "class": ["thrower", "skeleton/undead"]},
+    "Barbarians.png": {"elixir": 5, "class": ["brawler", "clan"]},
+    "Valkyrie.png": {"elixir": 4, "class": ["avenger", "clan"]},
+    "PEKKA.png": {"elixir": 7, "class": ["ace", "tank"]},
+    "Prince.png": {"elixir": 3, "class": ["brawler", "champion"]},
+    "GiantSkeleton.png": {"elixir": 6, "class": ["tank", "brawler", "skeleton/undead"]},
+    "DartGoblin.png": {"elixir": 3, "class": ["ranged", "goblin"]},
+    "Executioner.png": {"elixir": 5, "class": ["thrower", "ace"]},
+    "Princess.png": {"elixir": 5, "class": ["ranged", "champion"]},
+    "MegaKnight.png": {"elixir": 5, "class": ["brawler", "ace", "tank"]},
+    "RoyalGhost.png": {"elixir": 3, "class": ["assassin", "skeleton/undead"]},
+    "Bandit.png": {"elixir": 3, "class": ["ace", "avenger"]},
+    "Goblins.png": {"elixir": 2, "class": ["assassin", "goblin"]},
+    "SkeletonKing.png": {"elixir": 3, "class": ["tank", "skeleton/undead"]},
+    "GoldenKnight.png": {"elixir": 2, "class": ["assassin", "champion"]},
+    "ArcherQueen.png": {"elixir": 5, "class": ["avenger", "clan"]},
 }
 
 # --- GLOBAL VARIABLES ---
