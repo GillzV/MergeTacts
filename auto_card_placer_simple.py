@@ -95,67 +95,214 @@ calibrated_cards_roi = None    # x, y, w, h within window for cards area
 
 # --- ELIXIR DETECTION HELPERS ---
 def preprocess_elixir_image(img):
+    """Enhanced preprocessing for elixir detection"""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.GaussianBlur(gray, (3,3), 0)
-    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    kernel = np.ones((2,2), np.uint8)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-    return thresh
+    # Scale up for better OCR
+    gray = cv2.resize(gray, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+    # Apply gaussian blur to reduce noise
+    gray = cv2.GaussianBlur(gray, (5,5), 0)
+    # Try multiple thresholding methods
+    _, thresh1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, thresh2 = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+    # Use morphological operations to clean up
+    kernel = np.ones((3,3), np.uint8)
+    thresh1 = cv2.morphologyEx(thresh1, cv2.MORPH_CLOSE, kernel)
+    thresh1 = cv2.morphologyEx(thresh1, cv2.MORPH_OPEN, kernel)
+    return thresh1
 
-# OCR-based detection
+# OCR-based detection with better configuration
 def enhanced_ocr_detection(img):
-    proc = preprocess_elixir_image(img)
-    text = pytesseract.image_to_string(proc, config='--psm 7 digits')
-    digits = re.findall(r"\d+", text)
-    if digits:
+    """Enhanced OCR detection with multiple attempts"""
+    processed = preprocess_elixir_image(img)
+    
+    # Try different OCR configurations
+    ocr_configs = [
+        '--psm 8 -c tessedit_char_whitelist=0123456789',
+        '--psm 7 -c tessedit_char_whitelist=0123456789',
+        '--psm 6 -c tessedit_char_whitelist=0123456789',
+        '--psm 13 -c tessedit_char_whitelist=0123456789'
+    ]
+    
+    for config in ocr_configs:
         try:
-            val = int(digits[0])
-            return min(max(val, 0), 10)
-        except:
-            pass
-    # fallback to color detection
+            text = pytesseract.image_to_string(processed, config=config)
+            digits = re.findall(r"\d+", text)
+            if digits:
+                val = int(digits[0])
+                if 0 <= val <= 10:
+                    print(f"OCR detected elixir: {val} (config: {config})")
+                    return val
+        except Exception as e:
+            print(f"OCR attempt failed with config {config}: {e}")
+            continue
+    
+    print("OCR failed, falling back to color detection")
     return detect_elixir_from_color(img)
 
 # Color threshold-based detection (detect circle fill)
 def detect_elixir_from_color(img):
+    """Detect elixir based on color analysis"""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    # assume elixir bar is blue/purple
-    lower = np.array([120,50,50])
-    upper = np.array([160,255,255])
-    mask = cv2.inRange(hsv, lower, upper)
-    ratio = cv2.countNonZero(mask) / (img.shape[0]*img.shape[1])
-    est = int(ratio * 10 + 0.5)
-    return min(max(est, 0), 10)
+    
+    # Try multiple color ranges for elixir (purple/pink range)
+    color_ranges = [
+        (np.array([140, 50, 50]), np.array([180, 255, 255])),  # Purple-pink
+        (np.array([120, 50, 50]), np.array([160, 255, 255])),  # Blue-purple
+        (np.array([280, 50, 50]), np.array([320, 255, 255])),  # Magenta
+    ]
+    
+    max_ratio = 0
+    for lower, upper in color_ranges:
+        mask = cv2.inRange(hsv, lower, upper)
+        ratio = cv2.countNonZero(mask) / (img.shape[0] * img.shape[1])
+        max_ratio = max(max_ratio, ratio)
+    
+    # Convert ratio to elixir estimate
+    estimated = int(max_ratio * 15 + 0.5)  # Adjusted multiplier
+    result = min(max(estimated, 0), 10)
+    print(f"Color detection estimated elixir: {result} (ratio: {max_ratio:.3f})")
+    return result
 
 # Manual input fallback
 def get_manual_elixir_input():
+    """Get manual elixir input from user"""
     val = simpledialog.askinteger("Manual Elixir", "Enter current elixir (0-10):", minvalue=0, maxvalue=10)
     return val if val is not None else 5
 
+# Test elixir detection and show debug info
+def test_elixir_detection():
+    """Test elixir detection with debug information"""
+    if not selected_window:
+        messagebox.showwarning("Warning", "Please select a window first!")
+        return
+    
+    try:
+        # Get screenshot of elixir area
+        left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
+        
+        if calibrated_elixir_roi:
+            x, y, w, h = calibrated_elixir_roi
+            print(f"Using calibrated elixir ROI: {calibrated_elixir_roi}")
+        else:
+            # Default ROI near bottom-right corner
+            w, h = 100, 100
+            x, y = width - w - 20, height - h - 20
+            print(f"Using default elixir ROI: ({x}, {y}, {w}, {h})")
+        
+        # Take screenshot
+        screenshot = pyautogui.screenshot(region=(left + x, top + y, w, h))
+        img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        
+        # Save debug images
+        cv2.imwrite('debug_elixir_raw.png', img)
+        processed = preprocess_elixir_image(img)
+        cv2.imwrite('debug_elixir_processed.png', processed)
+        
+        # Try detection
+        if tesseract_found:
+            elixir = enhanced_ocr_detection(img)
+        else:
+            elixir = detect_elixir_from_color(img)
+        
+        # Show results
+        message = f"Detected Elixir: {elixir}\n\n"
+        message += f"ROI: ({x}, {y}, {w}, {h})\n"
+        message += f"Tesseract available: {tesseract_found}\n"
+        message += f"Debug images saved: debug_elixir_raw.png, debug_elixir_processed.png"
+        
+        messagebox.showinfo("Elixir Test Results", message)
+        
+    except Exception as e:
+        error_msg = f"Error testing elixir detection: {str(e)}"
+        print(error_msg)
+        messagebox.showerror("Error", error_msg)
+
+# Test card ROI detection
+def test_card_roi():
+    """Test card ROI detection"""
+    if not selected_window:
+        messagebox.showwarning("Warning", "Please select a window first!")
+        return
+    
+    try:
+        left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
+        
+        if calibrated_cards_roi:
+            x, y, w, h = calibrated_cards_roi
+            print(f"Using calibrated card ROI: {calibrated_cards_roi}")
+        else:
+            # Default to full window
+            x, y, w, h = 0, 0, width, height
+            print(f"Using default card ROI (full window): ({x}, {y}, {w}, {h})")
+        
+        # Take screenshot of card area
+        screenshot = pyautogui.screenshot(region=(left + x, top + y, w, h))
+        img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        
+        # Save debug image
+        cv2.imwrite('debug_cards_roi.png', img)
+        
+        # Try to find some cards in the current elixir range
+        current_elixir = get_current_elixir()
+        playable_cards = find_playable_cards(current_elixir)
+        
+        if playable_cards:
+            matches = match_templates(img, playable_cards[:5])  # Test first 5 cards
+            
+            message = f"Card ROI Test Results:\n\n"
+            message += f"ROI: ({x}, {y}, {w}, {h})\n"
+            message += f"Current Elixir: {current_elixir}\n"
+            message += f"Playable Cards: {len(playable_cards)}\n"
+            message += f"Matches Found: {len(matches)}\n\n"
+            
+            if matches:
+                message += "Top matches:\n"
+                for i, (name, confidence, pos, cost) in enumerate(matches[:3]):
+                    message += f"{i+1}. {name.replace('.jpg', '')} (conf: {confidence:.3f})\n"
+            else:
+                message += "No card matches found in ROI"
+            
+            message += f"\nDebug image saved: debug_cards_roi.png"
+            messagebox.showinfo("Card ROI Test Results", message)
+        else:
+            messagebox.showinfo("Card ROI Test", "No playable cards found for current elixir level")
+            
+    except Exception as e:
+        error_msg = f"Error testing card ROI: {str(e)}"
+        print(error_msg)
+        messagebox.showerror("Error", error_msg)
+
 # Combined wrapper
 def get_current_elixir():
+    """Get current elixir with error handling"""
     if not selected_window:
+        print("No window selected, returning default elixir")
         return 5
-    left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
-    if calibrated_elixir_roi:
-        x,y,w,h = calibrated_elixir_roi
-    else:
-        # default ROI near bottom-left
-        w,h = 100, 100
-        x,y = width - w - 20, height - h - 20
-    screenshot = pyautogui.screenshot(region=(left+x, top+y, w, h))
-    img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+    
     try:
-        return enhanced_ocr_detection(img)
+        left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
+        
+        if calibrated_elixir_roi:
+            x, y, w, h = calibrated_elixir_roi
+        else:
+            # Default ROI near bottom-right corner
+            w, h = 100, 100
+            x, y = width - w - 20, height - h - 20
+        
+        screenshot = pyautogui.screenshot(region=(left + x, top + y, w, h))
+        img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        
+        if tesseract_found:
+            return enhanced_ocr_detection(img)
+        else:
+            return detect_elixir_from_color(img)
+            
     except Exception as e:
-        print(f"Elixir OCR failed: {e}")
+        print(f"Elixir detection failed: {e}")
         return get_manual_elixir_input()
 
 # --- CALIBRATION ROUTINES ---
 # Elixir ROI calibration
-
 def visual_calibrate_elixir():
     global calibrated_elixir_roi
     if not selected_window:
@@ -188,6 +335,7 @@ def visual_calibrate_elixir():
             return
         calibrated_elixir_roi = (x, y, w, h)
         print(f"Elixir ROI = {calibrated_elixir_roi}")
+        messagebox.showinfo("Success", f"Elixir ROI calibrated: {calibrated_elixir_roi}")
         win.destroy()
     canvas.bind("<Button-1>", on_down)
     canvas.bind("<B1-Motion>", on_drag)
@@ -195,7 +343,6 @@ def visual_calibrate_elixir():
     win.image = img
 
 # Card ROI calibration
-
 def visual_calibrate_cards():
     global calibrated_cards_roi
     if not selected_window:
@@ -228,6 +375,7 @@ def visual_calibrate_cards():
             return
         calibrated_cards_roi = (x, y, w, h)
         print(f"Cards ROI = {calibrated_cards_roi}")
+        messagebox.showinfo("Success", f"Card ROI calibrated: {calibrated_cards_roi}")
         win.destroy()
     canvas.bind("<Button-1>", on_down)
     canvas.bind("<B1-Motion>", on_drag)
@@ -241,16 +389,22 @@ def find_playable_cards(current_elixir):
     return cards
 
 # Template matching within ROI
-
 def match_templates(region_img, card_list):
     matches = []
     for name, cost in card_list:
-        if not os.path.exists(name): continue
-        tpl = cv2.imread(name)
-        res = cv2.matchTemplate(region_img, tpl, cv2.TM_CCOEFF_NORMED)
-        _, maxv, _, maxl = cv2.minMaxLoc(res)
-        if maxv >= confidence_threshold:
-            matches.append((name, maxv, maxl, cost))
+        if not os.path.exists(name): 
+            continue
+        try:
+            tpl = cv2.imread(name)
+            if tpl is None:
+                continue
+            res = cv2.matchTemplate(region_img, tpl, cv2.TM_CCOEFF_NORMED)
+            _, maxv, _, maxl = cv2.minMaxLoc(res)
+            if maxv >= confidence_threshold:
+                matches.append((name, maxv, maxl, cost))
+        except Exception as e:
+            print(f"Error matching template {name}: {e}")
+            continue
     return matches
 
 # --- MOUSE CONTROL & CLICKING ---
@@ -265,7 +419,6 @@ def release_mouse_control():
     control_label.config(text="Mouse Control: DISABLED", fg="red")
 
 # Click based on ROI offsets
-
 def click_card(pos):
     if not mouse_control_active or not selected_window:
         return False
@@ -284,30 +437,34 @@ def click_card(pos):
 def automation_thread():
     print("=== AUTOMATION STARTED ===")
     while not stop_event.is_set():
-        el = get_current_elixir()
-        playable = find_playable_cards(el)
-        if not playable:
-            time.sleep(1)
-            continue
-        left, top = selected_window.left, selected_window.top
-        if calibrated_cards_roi:
-            cx, cy, w, h = calibrated_cards_roi
-            region = (left+cx, top+cy, w, h)
-        else:
-            region = (left, top, selected_window.width, selected_window.height)
-        shot = cv2.cvtColor(np.array(pyautogui.screenshot(region=region)), cv2.COLOR_RGB2BGR)
-        matches = match_templates(shot, playable)
-        if matches:
-            best = max(matches, key=lambda x: x[1])
-            click_card(best[2])
-            time.sleep(1)
-        time.sleep(2)
+        try:
+            el = get_current_elixir()
+            playable = find_playable_cards(el)
+            if not playable:
+                time.sleep(1)
+                continue
+            left, top = selected_window.left, selected_window.top
+            if calibrated_cards_roi:
+                cx, cy, w, h = calibrated_cards_roi
+                region = (left+cx, top+cy, w, h)
+            else:
+                region = (left, top, selected_window.width, selected_window.height)
+            shot = cv2.cvtColor(np.array(pyautogui.screenshot(region=region)), cv2.COLOR_RGB2BGR)
+            matches = match_templates(shot, playable)
+            if matches:
+                best = max(matches, key=lambda x: x[1])
+                click_card(best[2])
+                time.sleep(1)
+            time.sleep(2)
+        except Exception as e:
+            print(f"Error in automation thread: {e}")
+            time.sleep(2)
     print("=== AUTOMATION STOPPED ===")
 
 # --- GUI SETUP ---
 root = tk.Tk()
 root.title("Card Placer")
-root.geometry("700x600")
+root.geometry("700x650")
 
 # Window selection
 def refresh_windows():
@@ -320,8 +477,12 @@ def select_window():
     sel = window_listbox.curselection()
     if sel:
         title = window_listbox.get(sel[0])
-        selected_window = gw.getWindowsWithTitle(title)[0]
-        messagebox.showinfo("Selected", selected_window.title)
+        windows = gw.getWindowsWithTitle(title)
+        if windows:
+            selected_window = windows[0]
+            messagebox.showinfo("Selected", f"Selected: {selected_window.title}")
+        else:
+            messagebox.showerror("Error", "Window not found!")
 
 window_frame = tk.LabelFrame(root, text="Window Selection")
 window_frame.pack(fill="x", padx=10, pady=5)
@@ -350,11 +511,19 @@ setup_control_panel()
 def setup_calibration_panel():
     frame = tk.LabelFrame(root, text="Calibration")
     frame.pack(fill="x", padx=10, pady=5)
-    btns = tk.Frame(frame)
-    tk.Button(btns, text="Calibrate Elixir ROI", command=visual_calibrate_elixir, bg="orange").pack(side="left", padx=5)
-    tk.Button(btns, text="Test Elixir", command=lambda: messagebox.showinfo("Elixir", get_current_elixir()), bg="blue").pack(side="left", padx=5)
-    tk.Button(btns, text="Calibrate Card ROI", command=visual_calibrate_cards, bg="purple").pack(side="left", padx=5)
-    btns.pack()
+    
+    # First row of buttons
+    btns1 = tk.Frame(frame)
+    tk.Button(btns1, text="Calibrate Elixir ROI", command=visual_calibrate_elixir, bg="orange").pack(side="left", padx=5)
+    tk.Button(btns1, text="Test Elixir", command=test_elixir_detection, bg="lightblue").pack(side="left", padx=5)
+    btns1.pack(pady=2)
+    
+    # Second row of buttons
+    btns2 = tk.Frame(frame)
+    tk.Button(btns2, text="Calibrate Card ROI", command=visual_calibrate_cards, bg="purple", fg="white").pack(side="left", padx=5)
+    tk.Button(btns2, text="Test Card ROI", command=test_card_roi, bg="lightgreen").pack(side="left", padx=5)
+    btns2.pack(pady=2)
+
 setup_calibration_panel()
 
 # Automation controls
@@ -366,6 +535,22 @@ def setup_automation_panel():
     tk.Button(btns, text="Stop", command=lambda: stop_event.set(), bg="red").pack(side="left", padx=5)
     btns.pack()
 setup_automation_panel()
+
+# Status display
+def setup_status_panel():
+    frame = tk.LabelFrame(root, text="Status")
+    frame.pack(fill="x", padx=10, pady=5)
+    status_text = tk.Text(frame, height=8, width=80)
+    status_text.pack(fill="both", expand=True)
+    status_text.insert(tk.END, "=== Card Placer Ready ===\n")
+    status_text.insert(tk.END, "1. Select a window\n")
+    status_text.insert(tk.END, "2. Calibrate elixir ROI and test\n")
+    status_text.insert(tk.END, "3. Calibrate card ROI and test\n")
+    status_text.insert(tk.END, "4. Take mouse control\n")
+    status_text.insert(tk.END, "5. Start automation\n")
+    status_text.config(state=tk.DISABLED)
+
+setup_status_panel()
 
 root.bind('<Escape>', lambda e: stop_event.set())
 print("=== Card Placer Ready ===")
