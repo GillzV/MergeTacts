@@ -60,7 +60,8 @@ priorities = {
     "SpearGoblins.jpg": 3,
     "Valkyrie.jpg": 5,
 }
-confidence_threshold = 0.8
+# Adjusted confidence threshold for better matching
+confidence_threshold = 0.7
 
 # Card metadata: elixir cost for each card
 card_data = {
@@ -94,23 +95,101 @@ calibrated_elixir_roi = None  # x, y, w, h within window for elixir
 calibrated_cards_roi = None    # x, y, w, h within window for cards area
 
 # --- ELIXIR DETECTION HELPERS ---
-def preprocess_elixir_image(img):
-    """Enhanced preprocessing for elixir detection"""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Scale up for better OCR
-    gray = cv2.resize(gray, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
-    # Apply gaussian blur to reduce noise
-    gray = cv2.GaussianBlur(gray, (5,5), 0)
-    # Try multiple thresholding methods
-    _, thresh1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    _, thresh2 = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-    # Use morphological operations to clean up
-    kernel = np.ones((3,3), np.uint8)
-    thresh1 = cv2.morphologyEx(thresh1, cv2.MORPH_CLOSE, kernel)
-    thresh1 = cv2.morphologyEx(thresh1, cv2.MORPH_OPEN, kernel)
-    return thresh1
+# Load reference elixir images
+def load_elixir_references():
+    """Load reference elixir images for template matching"""
+    references = {}
+    elixir_dir = "Screenshots/Elixir"
+    
+    for i in range(10):  # 0-9
+        filename = f"{i}E.png"
+        filepath = os.path.join(elixir_dir, filename)
+        if os.path.exists(filepath):
+            img = cv2.imread(filepath)
+            if img is not None:
+                references[i] = img
+                print(f"Loaded elixir reference: {filename}")
+            else:
+                print(f"Failed to load: {filepath}")
+        else:
+            print(f"Missing reference: {filepath}")
+    
+    return references
 
-# OCR-based detection with better configuration
+# Global variable to store elixir references
+elixir_references = load_elixir_references()
+
+def preprocess_elixir_image(img):
+    """Preprocess elixir image for template matching"""
+    # Convert to grayscale for better matching
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Apply some preprocessing to improve matching
+    # Normalize brightness and contrast
+    gray = cv2.equalizeHist(gray)
+    
+    # Apply slight blur to reduce noise
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    
+    return gray
+
+# Template matching-based elixir detection
+def detect_elixir_from_templates(img):
+    """Detect elixir using template matching with reference images"""
+    if not elixir_references:
+        print("No elixir references loaded, falling back to color detection")
+        return detect_elixir_from_color(img)
+    
+    processed_img = preprocess_elixir_image(img)
+    
+    best_match = None
+    best_confidence = 0
+    best_elixir = 0
+    
+    # Try matching against each reference image
+    for elixir_count, reference_img in elixir_references.items():
+        try:
+            # Preprocess reference image the same way
+            processed_ref = preprocess_elixir_image(reference_img)
+            
+            # Multi-scale template matching
+            max_confidence = 0
+            for scale in np.linspace(0.5, 1.5, 20):  # Try different scales
+                # Resize reference image
+                h, w = processed_ref.shape
+                new_h, new_w = int(h * scale), int(w * scale)
+                
+                if new_h > processed_img.shape[0] or new_w > processed_img.shape[1]:
+                    continue
+                
+                resized_ref = cv2.resize(processed_ref, (new_w, new_h))
+                
+                # Template matching
+                result = cv2.matchTemplate(processed_img, resized_ref, cv2.TM_CCOEFF_NORMED)
+                _, confidence, _, _ = cv2.minMaxLoc(result)
+                
+                max_confidence = max(max_confidence, confidence)
+            
+            # Update best match if this one is better
+            if max_confidence > best_confidence:
+                best_confidence = max_confidence
+                best_elixir = elixir_count
+                best_match = max_confidence
+                
+        except Exception as e:
+            print(f"Error matching elixir {elixir_count}: {e}")
+            continue
+    
+    # If we found a good match, return the elixir count
+    if best_match and best_confidence > 0.6:  # Adjust threshold as needed
+        print(f"Template matching detected elixir: {best_elixir} (confidence: {best_confidence:.3f})")
+        return best_elixir
+    else:
+        print(f"No good template match found (best: {best_elixir} with confidence {best_confidence:.3f})")
+        # If no good match found, assume 10+ elixir
+        return 10
+
+# Enhanced OCR detection (kept as fallback)
 def enhanced_ocr_detection(img):
     """Enhanced OCR detection with multiple attempts"""
     processed = preprocess_elixir_image(img)
@@ -136,8 +215,8 @@ def enhanced_ocr_detection(img):
             print(f"OCR attempt failed with config {config}: {e}")
             continue
     
-    print("OCR failed, falling back to color detection")
-    return detect_elixir_from_color(img)
+    print("OCR failed, falling back to template matching")
+    return detect_elixir_from_templates(img)
 
 # Color threshold-based detection (detect circle fill)
 def detect_elixir_from_color(img):
@@ -199,14 +278,21 @@ def test_elixir_detection():
         cv2.imwrite('debug_elixir_processed.png', processed)
         
         # Try detection
-        if tesseract_found:
+        if elixir_references:
+            elixir = detect_elixir_from_templates(img)
+            detection_method = "Template Matching"
+        elif tesseract_found:
             elixir = enhanced_ocr_detection(img)
+            detection_method = "OCR"
         else:
             elixir = detect_elixir_from_color(img)
+            detection_method = "Color Detection"
         
         # Show results
-        message = f"Detected Elixir: {elixir}\n\n"
+        message = f"Detected Elixir: {elixir}\n"
+        message += f"Detection Method: {detection_method}\n\n"
         message += f"ROI: ({x}, {y}, {w}, {h})\n"
+        message += f"Reference Images Loaded: {len(elixir_references)}/10\n"
         message += f"Tesseract available: {tesseract_found}\n"
         message += f"Debug images saved: debug_elixir_raw.png, debug_elixir_processed.png"
         
@@ -214,6 +300,81 @@ def test_elixir_detection():
         
     except Exception as e:
         error_msg = f"Error testing elixir detection: {str(e)}"
+        print(error_msg)
+        messagebox.showerror("Error", error_msg)
+
+# Test template matching with reference images
+def test_template_matching():
+    """Test template matching against all reference images"""
+    if not elixir_references:
+        messagebox.showwarning("Warning", "No elixir reference images loaded!")
+        return
+    
+    try:
+        # Get screenshot of elixir area
+        if not selected_window:
+            messagebox.showwarning("Warning", "Please select a window first!")
+            return
+            
+        left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
+        
+        if calibrated_elixir_roi:
+            x, y, w, h = calibrated_elixir_roi
+        else:
+            w, h = 100, 100
+            x, y = width - w - 20, height - h - 20
+        
+        screenshot = pyautogui.screenshot(region=(left + x, top + y, w, h))
+        img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        
+        # Test against each reference
+        results = []
+        for elixir_count, reference_img in elixir_references.items():
+            try:
+                processed_img = preprocess_elixir_image(img)
+                processed_ref = preprocess_elixir_image(reference_img)
+                
+                max_confidence = 0
+                for scale in np.linspace(0.5, 1.5, 10):
+                    h, w = processed_ref.shape
+                    new_h, new_w = int(h * scale), int(w * scale)
+                    
+                    if new_h > processed_img.shape[0] or new_w > processed_img.shape[1]:
+                        continue
+                    
+                    resized_ref = cv2.resize(processed_ref, (new_w, new_h))
+                    result = cv2.matchTemplate(processed_img, resized_ref, cv2.TM_CCOEFF_NORMED)
+                    _, confidence, _, _ = cv2.minMaxLoc(result)
+                    max_confidence = max(max_confidence, confidence)
+                
+                results.append((elixir_count, max_confidence))
+                
+            except Exception as e:
+                print(f"Error testing elixir {elixir_count}: {e}")
+                results.append((elixir_count, 0))
+        
+        # Sort by confidence
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        # Build results message
+        message = "Template Matching Test Results:\n\n"
+        message += f"Current ROI: ({x}, {y}, {w}, {h})\n\n"
+        message += "Confidence scores:\n"
+        for elixir_count, confidence in results:
+            message += f"{elixir_count}E: {confidence:.3f}\n"
+        
+        best_match = results[0]
+        message += f"\nBest match: {best_match[0]}E (confidence: {best_match[1]:.3f})"
+        
+        if best_match[1] > 0.6:
+            message += "\n✓ Good match found!"
+        else:
+            message += "\n✗ No good match - assuming 10+ elixir"
+        
+        messagebox.showinfo("Template Matching Test", message)
+        
+    except Exception as e:
+        error_msg = f"Error testing template matching: {str(e)}"
         print(error_msg)
         messagebox.showerror("Error", error_msg)
 
@@ -292,7 +453,10 @@ def get_current_elixir():
         screenshot = pyautogui.screenshot(region=(left + x, top + y, w, h))
         img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
         
-        if tesseract_found:
+        # Try template matching first (most reliable with reference images)
+        if elixir_references:
+            return detect_elixir_from_templates(img)
+        elif tesseract_found:
             return enhanced_ocr_detection(img)
         else:
             return detect_elixir_from_color(img)
@@ -398,8 +562,22 @@ def match_templates(region_img, card_list):
             tpl = cv2.imread(name)
             if tpl is None:
                 continue
-            res = cv2.matchTemplate(region_img, tpl, cv2.TM_CCOEFF_NORMED)
-            _, maxv, _, maxl = cv2.minMaxLoc(res)
+
+            # Multi-scale template matching
+            found = None
+            for scale in np.linspace(0.8, 1.2, 20)[::-1]:
+                # Resize template and check if it fits within the region image
+                resized_tpl = cv2.resize(tpl, (int(tpl.shape[1] * scale), int(tpl.shape[0] * scale)))
+                if resized_tpl.shape[0] > region_img.shape[0] or resized_tpl.shape[1] > region_img.shape[1]:
+                    continue
+
+                res = cv2.matchTemplate(region_img, resized_tpl, cv2.TM_CCOEFF_NORMED)
+                _, maxv, _, maxl = cv2.minMaxLoc(res)
+
+                if found is None or maxv > found[0]:
+                    found = (maxv, maxl)
+
+            maxv, maxl = found
             if maxv >= confidence_threshold:
                 matches.append((name, maxv, maxl, cost))
         except Exception as e:
@@ -516,6 +694,7 @@ def setup_calibration_panel():
     btns1 = tk.Frame(frame)
     tk.Button(btns1, text="Calibrate Elixir ROI", command=visual_calibrate_elixir, bg="orange").pack(side="left", padx=5)
     tk.Button(btns1, text="Test Elixir", command=test_elixir_detection, bg="lightblue").pack(side="left", padx=5)
+    tk.Button(btns1, text="Test Templates", command=test_template_matching, bg="yellow").pack(side="left", padx=5)
     btns1.pack(pady=2)
     
     # Second row of buttons
