@@ -337,11 +337,13 @@ def visual_calibrate_elixir():
     if not selected_window:
         messagebox.showwarning("Warning", "Please select a window first!")
         return
-    
     left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
     screenshot = pyautogui.screenshot(region=(left, top, width, height))
     img_pil = Image.frombytes('RGB', screenshot.size, screenshot.tobytes())
-    img = ImageTk.PhotoImage(img_pil)
+    display_scale = 0.5
+    disp_w, disp_h = int(img_pil.width * display_scale), int(img_pil.height * display_scale)
+    img_pil_small = img_pil.resize((disp_w, disp_h), Image.LANCZOS)
+    img = ImageTk.PhotoImage(img_pil_small)
     
     win = tk.Toplevel(root)
     win.title("Select Elixir ROI - Live Template Matching")
@@ -383,7 +385,12 @@ def visual_calibrate_elixir():
         try:
             if roi_w < 10 or roi_h < 10: return
             
-            crop_img = screenshot.crop((roi_x, roi_y, roi_x + roi_w, roi_y + roi_h))
+            # Map ROI from display to original size
+            orig_x = int(roi_x / display_scale)
+            orig_y = int(roi_y / display_scale)
+            orig_w = int(roi_w / display_scale)
+            orig_h = int(roi_h / display_scale)
+            crop_img = screenshot.crop((orig_x, orig_y, orig_x + orig_w, orig_y + orig_h))
             img_cv = cv2.cvtColor(np.array(crop_img), cv2.COLOR_RGB2BGR)
 
             processed_img = preprocess_elixir_image(img_cv)
@@ -403,7 +410,7 @@ def visual_calibrate_elixir():
             results.sort(key=lambda x: x[1], reverse=True)
             
             results_text.delete(1.0, tk.END)
-            results_text.insert(tk.END, f"ROI: ({roi_w}x{roi_h})\n\nConfidence:\n")
+            results_text.insert(tk.END, f"ROI: ({orig_w}x{orig_h})\n\nConfidence:\n")
             
             for num, conf in results:
                 results_text.insert(tk.END, f"{num}E: {conf:.3f}\n")
@@ -441,12 +448,15 @@ def visual_calibrate_elixir():
         y = int(min(coords['y1'], coords['y2']))
         w = int(abs(coords['x1'] - coords['x2']))
         h = int(abs(coords['y1'] - coords['y2']))
-
         if w < 10 or h < 10:
             messagebox.showerror("Error", "Selected area is too small!")
             return
-            
-        calibrated_elixir_roi = (x, y, w, h)
+        # Map ROI from display to original size
+        orig_x = int(x / display_scale)
+        orig_y = int(y / display_scale)
+        orig_w = int(w / display_scale)
+        orig_h = int(h / display_scale)
+        calibrated_elixir_roi = (orig_x, orig_y, orig_w, orig_h)
         print(f"Elixir ROI calibrated to: {calibrated_elixir_roi}")
         messagebox.showinfo("Success", f"Elixir ROI set to {calibrated_elixir_roi}")
         win.destroy()
@@ -588,11 +598,13 @@ def visual_calibrate_cards():
     if not selected_window:
         messagebox.showwarning("Warning", "Please select a window first!")
         return
-    
     left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
     screenshot = pyautogui.screenshot(region=(left, top, width, height))
     img_pil = Image.frombytes('RGB', screenshot.size, screenshot.tobytes())
-    img = ImageTk.PhotoImage(img_pil)
+    display_scale = 0.5
+    disp_w, disp_h = int(img_pil.width * display_scale), int(img_pil.height * display_scale)
+    img_pil_small = img_pil.resize((disp_w, disp_h), Image.LANCZOS)
+    img = ImageTk.PhotoImage(img_pil_small)
     
     win = tk.Toplevel(root)
     win.title("Select Card Area ROI - Live Feedback")
@@ -638,14 +650,19 @@ def visual_calibrate_cards():
                 status_label.config(text="Box is too small.", fg="orange")
                 return
             
-            crop_img = screenshot.crop((roi_x, roi_y, roi_x + roi_w, roi_y + roi_h))
+            # Map ROI from display to original size
+            orig_x = int(roi_x / display_scale)
+            orig_y = int(roi_y / display_scale)
+            orig_w = int(roi_w / display_scale)
+            orig_h = int(roi_h / display_scale)
+            crop_img = screenshot.crop((orig_x, orig_y, orig_x + orig_w, orig_y + orig_h))
             img_cv = cv2.cvtColor(np.array(crop_img), cv2.COLOR_RGB2BGR)
 
             matches = match_templates(img_cv, all_cards_for_test)
             matches.sort(key=lambda item: item[1], reverse=True)
 
             results_text.delete(1.0, tk.END)
-            results_text.insert(tk.END, f"ROI: ({roi_w}x{roi_h})\n\nDetected Cards:\n")
+            results_text.insert(tk.END, f"ROI: ({orig_w}x{orig_h})\n\nDetected Cards:\n")
 
             if matches:
                 status_label.config(text=f"✅ Found {len(matches)} potential match(es)!", fg="green")
@@ -690,7 +707,12 @@ def visual_calibrate_cards():
             messagebox.showerror("Error", "Selected area is too small for cards!")
             return
             
-        calibrated_cards_roi = (x, y, w, h)
+        # Map ROI from display to original size
+        orig_x = int(x / display_scale)
+        orig_y = int(y / display_scale)
+        orig_w = int(w / display_scale)
+        orig_h = int(h / display_scale)
+        calibrated_cards_roi = (orig_x, orig_y, orig_w, orig_h)
         print(f"Cards ROI calibrated to: {calibrated_cards_roi}")
         messagebox.showinfo("Success", f"Card ROI calibrated: {calibrated_cards_roi}")
         win.destroy()
