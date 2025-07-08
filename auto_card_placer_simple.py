@@ -39,7 +39,7 @@ priorities = {
     "Valkyrie.png": 5,
 }
 # Adjusted confidence threshold for better matching
-confidence_threshold = 0.2
+confidence_threshold = 0.21
 
 # Card metadata: elixir cost for each card
 card_data = {
@@ -882,6 +882,12 @@ def automation_thread():
                 continue
             else:
                 elixir_zero_counter = 0
+            # Extra guard: never click if elixir is 0 or 1
+            if el <= 1:
+                print(f"(Extra Guard) Elixir is {el}, skipping card click.")
+                time.sleep(0.5)
+                last_attempted_card = None
+                continue
             playable = find_playable_cards(el)
             if not playable:
                 print(f"No playable cards for elixir={el}, skipping card click.")
@@ -999,7 +1005,7 @@ def find_and_click_battle_button():
             continue
     if found is not None:
         maxv, maxl, w, h = found
-        if maxv >= 0.7:
+        if maxv >= 0.72:
             center_pos = (maxl[0] + w // 2, maxl[1] + h // 2)
             pyautogui.click(center_pos)
             print(f"Clicked Battle button at {center_pos} (confidence={maxv:.3f})")
@@ -1045,23 +1051,35 @@ def find_and_click_button(template_path, name, confidence=0.7):
 
 def periodic_button_clicker():
     print("Periodic button clicker started.")
+    goblin_last_check = 0
+    GOBLIN_INTERVAL = 1  # seconds
+    other_last_check = 0
+    OTHER_INTERVAL = 2  # seconds
     while not periodic_stop_event.is_set():
-        for btn_name, btn_file in [
-            ("PlayAgainButton", os.path.join("Screenshots", "PlayAgainButton.png")),
-            ("BattleButton", os.path.join("Screenshots", "BattleButton.png")),
-            ("QuitButton", os.path.join("Screenshots", "QuitButton.png")),
-            ("GoblinClick", os.path.join("Screenshots", "GoblinClick.png")),
-        ]:
-            # Use 0.7 confidence for PlayAgainButton and BattleButton, else default
-            conf = 0.7 if btn_name in ["PlayAgainButton", "BattleButton"] else 0.7
-            find_and_click_button(btn_file, btn_name, confidence=conf)
-            if periodic_stop_event.is_set():
-                break
-        # Wait 2 seconds or until stopped
-        for _ in range(2):
-            if periodic_stop_event.is_set():
-                break
-            time.sleep(1)
+        now = time.time()
+        # Check GoblinClick every 1 second
+        if now - goblin_last_check >= GOBLIN_INTERVAL:
+            find_and_click_button(os.path.join("Screenshots", "GoblinClick.png"), "GoblinClick")
+            goblin_last_check = now
+        # Check other buttons every 2 seconds
+        if now - other_last_check >= OTHER_INTERVAL:
+            for btn_name, btn_file in [
+                ("PlayAgainButton", os.path.join("Screenshots", "PlayAgainButton.png")),
+                ("BattleButton", os.path.join("Screenshots", "BattleButton.png")),
+                ("QuitButton", os.path.join("Screenshots", "QuitButton.png")),
+            ]:
+                if btn_name == "BattleButton":
+                    conf = 0.72
+                elif btn_name == "PlayAgainButton":
+                    conf = 0.7
+                else:
+                    conf = 0.7
+                find_and_click_button(btn_file, btn_name, confidence=conf)
+                if periodic_stop_event.is_set():
+                    break
+            other_last_check = now
+        time.sleep(0.2)
+    print("Periodic button clicker stopped.")
 
 root = tk.Tk()
 root.title("Card Placer")
