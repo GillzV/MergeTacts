@@ -13,7 +13,7 @@ import json
 
 # Configure pyautogui for non-admin operation
 pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.1
+pyautogui.PAUSE = 0.5
 
 # --- CONFIGURATION ---
 priorities = {
@@ -74,6 +74,11 @@ calibrated_cards_roi = None   # x, y, w, h within window for cards area
 win_border = 0
 title_bar = 0
 ROI_CONFIG_FILE = "roi_config.json"
+elixir_zero_counter = 0
+ELIXIR_ZERO_LIMIT = 5
+periodic_stop_event = threading.Event()
+last_click_time = {}
+COOLDOWN = 2  # seconds
 
 # --- ROI PERSISTENCE HELPERS ---
 def save_roi_config():
@@ -781,12 +786,10 @@ def match_templates(region_img, card_list):
                 continue
         if found is not None:
             maxv, maxl, w, h = found
-            print(f"{name}: max confidence = {maxv:.3f}")
             if maxv >= confidence_threshold:
+                print(f"{name}: confidence = {maxv:.3f}")
                 center_pos = (maxl[0] + w // 2, maxl[1] + h // 2)
                 matches.append((name, maxv, center_pos, cost))
-        else:
-            print(f"{name}: no valid match found")
     return matches
 
 def take_mouse_control():
@@ -821,35 +824,70 @@ def click_card(pos):
 automation_active = False
 def automation_thread():
     global automation_active
+    global periodic_thread
+    global clicked_cards
+    global last_attempted_card
+    global elixir_zero_counter
+    global periodic_stop_event
+    global last_click_time
     if automation_active:
         print("Automation is already running.")
         return
     automation_active = True
     stop_event.clear()
+    periodic_stop_event.clear()
+    clicked_cards = []
+    last_attempted_card = None
+    elixir_zero_counter = 0
+    last_click_time = {}
     print("=== AUTOMATION STARTED ===")
-    
+    # Start periodic button clicker
+    periodic_thread = threading.Thread(target=periodic_button_clicker, daemon=True)
+    periodic_thread.start()
     # Step 1: Find and click battle button before anything else
     print("Looking for Battle button...")
     battle_clicked = find_and_click_battle_button()
-    if not battle_clicked:
+    if battle_clicked:
+        print("Battle button clicked, waiting 2 seconds before proceeding...")
+        time.sleep(2)
+    else:
         print("Battle button not found. Proceeding to automation anyway.")
-    
+
+    # Guarantee: no card clicks or screenshots before this point
+    first_card_click = True
     while not stop_event.is_set():
         if not selected_window or not mouse_control_active:
             time.sleep(1)
             continue
         try:
             el = get_current_elixir()
-            if el == 0:
-                print("Elixir is 0, skipping card click.")
+            # End-of-game detection: if elixir is None, 0, or 1 for several loops, stop clicking
+            if el is None or el <= 1:
+                elixir_zero_counter += 1
+                print(f"Elixir is {el}, skipping card click. (zero count: {elixir_zero_counter})")
                 time.sleep(0.5)
+                last_attempted_card = None
+                if elixir_zero_counter >= ELIXIR_ZERO_LIMIT:
+                    print("Elixir has been 0 or 1 for several loops. Assuming end of game. Stopping card clicks until elixir increases.")
+                    # Wait for elixir to increase (handled by next loop)
+                    while True:
+                        if stop_event.is_set():
+                            break
+                        el_check = get_current_elixir()
+                        if el_check is not None and el_check > 1:
+                            print(f"Elixir increased to {el_check}, resuming card clicks.")
+                            elixir_zero_counter = 0
+                            break
+                        time.sleep(1)
                 continue
+            else:
+                elixir_zero_counter = 0
             playable = find_playable_cards(el)
             if not playable:
                 print(f"No playable cards for elixir={el}, skipping card click.")
                 time.sleep(0.5)
+                last_attempted_card = None
                 continue
-            
             left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
             if calibrated_cards_roi:
                 cx, cy, w, h = calibrated_cards_roi
@@ -864,22 +902,65 @@ def automation_thread():
                 w = int(width)
                 h = int(height)
                 region = (ox, oy, w, h)
-            
             shot = cv2.cvtColor(np.array(pyautogui.screenshot(region=region)), cv2.COLOR_RGB2BGR)
             matches = match_templates(shot, playable)
-            
             if matches:
-                matches.sort(key=lambda item: priorities.get(item[0], 999))
-                best = matches[0]
-                print(f"Best card to play: {best[0].replace('.png','')} with cost {best[3]}")
-                if click_card(best[2]):
+                # Prefer cards already clicked
+                card_names_in_matches = [m[0] for m in matches]
+                preferred = None
+                for c in clicked_cards:
+                    if c in card_names_in_matches:
+                        preferred = next(m for m in matches if m[0] == c)
+                        break
+                if preferred is None:
+                    # Pick the best as before
+                    matches.sort(key=lambda item: priorities.get(item[0], 999))
+                    preferred = matches[0]
+                    if preferred[0] not in clicked_cards:
+                        clicked_cards.append(preferred[0])
+                print(f"Card to play: {preferred[0].replace('.png','')} with cost {preferred[3]}")
+                # Double check: never click if elixir is 0 or 1
+                if el <= 1:
+                    print(f"(Guard) Elixir is {el}, skipping card click.")
+                    time.sleep(0.5)
+                    last_attempted_card = None
+                    continue
+                # Debounce repeated clicks on the same card
+                name = preferred[0]
+                now = time.time()
+                if name in last_click_time and now - last_click_time[name] < COOLDOWN:
+                    print(f"Debounce: Skipping click on {name} (cooldown {COOLDOWN}s not elapsed)")
                     time.sleep(1)
-            
-            time.sleep(1)
+                    continue
+                # If the same card is still the only available card, keep clicking it
+                if len(matches) == 1:
+                    if last_attempted_card == preferred[0]:
+                        print(f"Still only {preferred[0].replace('.png','')} available, clicking again (likely waiting for elixir).")
+                        if preferred[1] >= confidence_threshold:
+                            if click_card(preferred[2]):
+                                last_click_time[name] = now
+                                time.sleep(1.5)
+                        else:
+                            print(f"Confidence {preferred[1]:.3f} is too low, not clicking.")
+                        time.sleep(1)
+                        continue
+                    else:
+                        last_attempted_card = preferred[0]
+                else:
+                    last_attempted_card = preferred[0]
+                if preferred[1] >= confidence_threshold:
+                    if click_card(preferred[2]):
+                        last_click_time[name] = now
+                        time.sleep(1.5)
+                else:
+                    print(f"Confidence {preferred[1]:.3f} is too low, not clicking.")
+                time.sleep(1)
+            else:
+                last_attempted_card = None
+                time.sleep(1)
         except Exception as e:
             print(f"Error in automation thread: {e}")
             time.sleep(2)
-            
     automation_active = False
     print("=== AUTOMATION STOPPED ===")
 
