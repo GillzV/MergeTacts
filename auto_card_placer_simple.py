@@ -846,6 +846,7 @@ def automation_thread():
                 continue
             playable = find_playable_cards(el)
             if not playable:
+                print(f"No playable cards for elixir={el}, skipping card click.")
                 time.sleep(0.5)
                 continue
             
