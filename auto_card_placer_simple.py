@@ -203,14 +203,45 @@ def test_elixir_detection():
         processed = preprocess_elixir_image(img)
         cv2.imwrite('debug_elixir_processed.png', processed)
         
-        elixir = detect_elixir_from_templates(img)
-        detection_method = "Template Matching (Improved)"
+        # Use the same improved detection logic as the live feedback
+        if not elixir_references:
+            message = "No elixir references loaded. Cannot detect elixir."
+            show_scrollable_message("Elixir Test Results", message)
+            return
         
-        message = f"Detected Elixir: {elixir}\n"
-        message += f"Detection Method: {detection_method}\n\n"
+        results = []
+        for elixir_count, ref_img in elixir_references.items():
+            processed_ref = preprocess_elixir_image(ref_img)
+            res = cv2.matchTemplate(processed, processed_ref, cv2.TM_CCOEFF_NORMED)
+            _, confidence, _, _ = cv2.minMaxLoc(res)
+            results.append((elixir_count, confidence))
+        
+        results.sort(key=lambda x: x[1], reverse=True)
+        best_num, best_conf = results[0]
+        
+        # Determine detected elixir based on confidence threshold
+        if best_conf > 0.80:
+            detected_elixir = best_num
+            status = "✓ Good match found!"
+        else:
+            detected_elixir = 10  # Assume 10+ if no good match
+            status = "✗ No good match - assuming 10+ elixir"
+        
+        message = f"Detected Elixir: {detected_elixir}\n"
+        message += f"Detection Method: Template Matching (Improved)\n"
+        message += f"Status: {status}\n\n"
         message += f"ROI: ({x}, {y}, {w}, {h})\n"
-        message += f"Reference Images Loaded: {len(elixir_references)}/10\n"
-        message += f"Debug images saved: debug_elixir_raw.png, debug_elixir_processed.png"
+        message += f"Reference Images Loaded: {len(elixir_references)}/10\n\n"
+        message += "All Confidence Scores:\n"
+        message += "-" * 40 + "\n"
+        
+        for num, conf in results:
+            if num == best_num:
+                message += f"→ {num}E: {conf:.3f} (BEST)\n"
+            else:
+                message += f"  {num}E: {conf:.3f}\n"
+        
+        message += f"\nDebug images saved: debug_elixir_raw.png, debug_elixir_processed.png"
         
         show_scrollable_message("Elixir Test Results", message)
         
