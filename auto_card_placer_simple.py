@@ -38,7 +38,7 @@ priorities = {
     "Valkyrie.jpg": 5,
 }
 # Adjusted confidence threshold for better matching
-confidence_threshold = 0.7
+confidence_threshold = 0.5
 
 # Card metadata: elixir cost for each card
 card_data = {
@@ -144,7 +144,7 @@ def detect_elixir_from_templates(img):
             print(f"Error matching elixir {elixir_count}: {e}")
             continue
     
-    if best_confidence > 0.80:
+    if best_confidence > 0.60:  # Lowered threshold from 0.80 to 0.60
         print(f"Template matching detected elixir: {best_elixir} (confidence: {best_confidence:.3f})")
         return best_elixir
     else:
@@ -220,7 +220,7 @@ def test_elixir_detection():
         best_num, best_conf = results[0]
         
         # Determine detected elixir based on confidence threshold
-        if best_conf > 0.80:
+        if best_conf > 0.60:  # Lowered threshold from 0.80 to 0.60
             detected_elixir = best_num
             status = "✓ Good match found!"
         else:
@@ -351,7 +351,7 @@ def visual_calibrate_elixir():
                 results_text.insert(tk.END, f"{num}E: {conf:.3f}\n")
 
             best_num, best_conf = results[0]
-            if best_conf > 0.8:
+            if best_conf > 0.6:  # Lowered threshold from 0.8 to 0.6
                 status_label.config(text=f"✅ Good Match: {best_num}E ({best_conf:.2f})", fg="green")
             else:
                 status_label.config(text=f"⚠️ Low Match: {best_num}E ({best_conf:.2f})", fg="orange")
@@ -455,7 +455,7 @@ def test_template_matching():
         best_match = results[0]
         message += f"\nBest match: {best_match[0]}E (confidence: {best_match[1]:.3f})"
         
-        if best_match[1] > 0.8:
+        if best_match[1] > 0.6:  # Lowered threshold from 0.8 to 0.6
             message += "\n✓ Good match found!"
         else:
             message += "\n✗ Match confidence is low. Consider recalibrating the ROI."
