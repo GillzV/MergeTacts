@@ -248,6 +248,36 @@ def get_manual_elixir_input():
     val = simpledialog.askinteger("Manual Elixir", "Enter current elixir (0-10):", minvalue=0, maxvalue=10)
     return val if val is not None else 5
 
+# Scrollable message box for long results
+def show_scrollable_message(title, message):
+    """Show a scrollable message box for long content"""
+    win = tk.Toplevel(root)
+    win.title(title)
+    win.geometry("600x400")
+    
+    # Create main frame
+    main_frame = tk.Frame(win)
+    main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+    
+    # Create text widget with scrollbar
+    text_frame = tk.Frame(main_frame)
+    text_frame.pack(fill="both", expand=True)
+    
+    text_scrollbar = tk.Scrollbar(text_frame)
+    text_widget = tk.Text(text_frame, wrap=tk.WORD, yscrollcommand=text_scrollbar.set)
+    
+    text_scrollbar.config(command=text_widget.yview)
+    text_scrollbar.pack(side="right", fill="y")
+    text_widget.pack(side="left", fill="both", expand=True)
+    
+    # Insert message
+    text_widget.insert(tk.END, message)
+    text_widget.config(state=tk.DISABLED)
+    
+    # Add close button
+    close_btn = tk.Button(main_frame, text="Close", command=win.destroy)
+    close_btn.pack(pady=5)
+
 # Test elixir detection and show debug info
 def test_elixir_detection():
     """Test elixir detection with debug information"""
@@ -296,7 +326,7 @@ def test_elixir_detection():
         message += f"Tesseract available: {tesseract_found}\n"
         message += f"Debug images saved: debug_elixir_raw.png, debug_elixir_processed.png"
         
-        messagebox.showinfo("Elixir Test Results", message)
+        show_scrollable_message("Elixir Test Results", message)
         
     except Exception as e:
         error_msg = f"Error testing elixir detection: {str(e)}"
@@ -371,7 +401,7 @@ def test_template_matching():
         else:
             message += "\n✗ No good match - assuming 10+ elixir"
         
-        messagebox.showinfo("Template Matching Test", message)
+        show_scrollable_message("Template Matching Test", message)
         
     except Exception as e:
         error_msg = f"Error testing template matching: {str(e)}"
@@ -424,7 +454,7 @@ def test_card_roi():
                 message += "No card matches found in ROI"
             
             message += f"\nDebug image saved: debug_cards_roi.png"
-            messagebox.showinfo("Card ROI Test Results", message)
+            show_scrollable_message("Card ROI Test Results", message)
         else:
             messagebox.showinfo("Card ROI Test", "No playable cards found for current elixir level")
             
@@ -466,69 +496,291 @@ def get_current_elixir():
         return get_manual_elixir_input()
 
 # --- CALIBRATION ROUTINES ---
-# Elixir ROI calibration
+# Elixir ROI calibration with live template matching feedback
 def visual_calibrate_elixir():
     global calibrated_elixir_roi
     if not selected_window:
         messagebox.showwarning("Warning", "Please select a window first!")
         return
+    
     left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
     screenshot = pyautogui.screenshot(region=(left, top, width, height))
     img = ImageTk.PhotoImage(screenshot)
+    
     win = tk.Toplevel(root)
-    win.title("Select Elixir ROI")
-    canvas = tk.Canvas(win, width=width, height=height, cursor="cross")
-    canvas.pack()
-    canvas.create_image(0,0,anchor=tk.NW, image=img)
+    win.title("Select Elixir ROI - Live Template Matching")
+    win.geometry("1000x700")
+    
+    # Create main frame with scrollbar support
+    main_frame = tk.Frame(win)
+    main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+    
+    # Left side - canvas for selection with scrollbars
+    canvas_frame = tk.Frame(main_frame)
+    canvas_frame.pack(side="left", fill="both", expand=True)
+    
+    # Create canvas with scrollbars
+    canvas_container = tk.Frame(canvas_frame)
+    canvas_container.pack(fill="both", expand=True)
+    
+    # Create scrollbars
+    h_scrollbar = tk.Scrollbar(canvas_container, orient="horizontal")
+    v_scrollbar = tk.Scrollbar(canvas_container, orient="vertical")
+    
+    # Create canvas with scrollbars
+    canvas = tk.Canvas(canvas_container, 
+                      width=min(width, 600), 
+                      height=min(height, 500),
+                      cursor="cross",
+                      xscrollcommand=h_scrollbar.set,
+                      yscrollcommand=v_scrollbar.set)
+    
+    # Configure scrollbars
+    h_scrollbar.config(command=canvas.xview)
+    v_scrollbar.config(command=canvas.yview)
+    
+    # Pack scrollbars and canvas
+    h_scrollbar.pack(side="bottom", fill="x")
+    v_scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+    
+    # Add image to canvas
+    canvas.create_image(0, 0, anchor=tk.NW, image=img)
+    canvas.config(scrollregion=canvas.bbox("all"))
+    
+    # Right side - feedback panel with scrollbar
+    feedback_frame = tk.Frame(main_frame)
+    feedback_frame.pack(side="right", fill="y", padx=(10, 0))
+    
+    # Feedback labels
+    tk.Label(feedback_frame, text="Template Matching Results:", font=("Arial", 12, "bold")).pack(anchor="w")
+    
+    status_label = tk.Label(feedback_frame, text="Select an area to test template matching", fg="blue")
+    status_label.pack(anchor="w", pady=5)
+    
+    # Create text widget with scrollbar
+    text_frame = tk.Frame(feedback_frame)
+    text_frame.pack(fill="y", expand=True)
+    
+    text_scrollbar = tk.Scrollbar(text_frame)
+    results_text = tk.Text(text_frame, width=35, height=20, font=("Courier", 9),
+                          yscrollcommand=text_scrollbar.set)
+    
+    text_scrollbar.config(command=results_text.yview)
+    text_scrollbar.pack(side="right", fill="y")
+    results_text.pack(side="left", fill="y", expand=True)
+    
     coords = [0,0]
     rect = None
+    
+    def update_template_matching(x, y, w, h):
+        """Update template matching results for the selected area"""
+        try:
+            # Take screenshot of the selected area
+            screenshot = pyautogui.screenshot(region=(left + x, top + y, w, h))
+            img_cv = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+            
+            # Test against reference images
+            if not elixir_references:
+                status_label.config(text="No reference images loaded!", fg="red")
+                return
+            
+            results = []
+            for elixir_count, reference_img in elixir_references.items():
+                try:
+                    processed_img = preprocess_elixir_image(img_cv)
+                    processed_ref = preprocess_elixir_image(reference_img)
+                    
+                    max_confidence = 0
+                    for scale in np.linspace(0.5, 1.5, 10):
+                        h_ref, w_ref = processed_ref.shape
+                        new_h, new_w = int(h_ref * scale), int(w_ref * scale)
+                        
+                        if new_h > processed_img.shape[0] or new_w > processed_img.shape[1]:
+                            continue
+                        
+                        resized_ref = cv2.resize(processed_ref, (new_w, new_h))
+                        result = cv2.matchTemplate(processed_img, resized_ref, cv2.TM_CCOEFF_NORMED)
+                        _, confidence, _, _ = cv2.minMaxLoc(result)
+                        max_confidence = max(max_confidence, confidence)
+                    
+                    results.append((elixir_count, max_confidence))
+                    
+                except Exception as e:
+                    results.append((elixir_count, 0))
+            
+            # Sort by confidence
+            results.sort(key=lambda x: x[1], reverse=True)
+            
+            # Update display
+            results_text.delete(1.0, tk.END)
+            results_text.insert(tk.END, f"ROI: ({x}, {y}, {w}, {h})\n\n")
+            results_text.insert(tk.END, "Confidence scores:\n")
+            results_text.insert(tk.END, "-" * 30 + "\n")
+            
+            for elixir_count, confidence in results:
+                color_tag = "good" if confidence > 0.6 else "poor"
+                results_text.insert(tk.END, f"{elixir_count}E: {confidence:.3f}\n")
+            
+            best_match = results[0]
+            if best_match[1] > 0.6:
+                status_label.config(text=f"✓ Good match: {best_match[0]}E ({best_match[1]:.3f})", fg="green")
+            else:
+                status_label.config(text=f"✗ Poor match: {best_match[0]}E ({best_match[1]:.3f})", fg="red")
+                
+        except Exception as e:
+            status_label.config(text=f"Error: {str(e)}", fg="red")
+            results_text.delete(1.0, tk.END)
+            results_text.insert(tk.END, f"Error testing template matching:\n{str(e)}")
+    
     def on_down(e):
         nonlocal rect
         coords[0], coords[1] = e.x, e.y
         if rect: canvas.delete(rect)
         rect = canvas.create_rectangle(e.x,e.y,e.x,e.y, outline='red', width=2)
+        status_label.config(text="Drag to select area...", fg="blue")
+    
     def on_drag(e):
         canvas.coords(rect, coords[0], coords[1], e.x, e.y)
+        
+        # Update template matching in real-time
+        x0, y0 = coords
+        x1, y1 = e.x, e.y
+        x, y = min(x0,x1), min(y0,y1)
+        w, h = abs(x1-x0), abs(y1-y0)
+        
+        if w > 10 and h > 10:
+            update_template_matching(x, y, w, h)
+    
     def on_up(e):
         x0,y0 = coords
         x1,y1 = e.x, e.y
         x, y = min(x0,x1), min(y0,y1)
         w, h = abs(x1-x0), abs(y1-y0)
+        
         if w<10 or h<10:
             messagebox.showerror("Error", "Select a larger area!")
             return
+        
         calibrated_elixir_roi = (x, y, w, h)
         print(f"Elixir ROI = {calibrated_elixir_roi}")
-        messagebox.showinfo("Success", f"Elixir ROI calibrated: {calibrated_elixir_roi}")
+        
+        # Final template matching test
+        update_template_matching(x, y, w, h)
+        
+        # Show final results
+        final_message = f"Elixir ROI calibrated: {calibrated_elixir_roi}\n\n"
+        final_message += "Template matching results:\n"
+        
+        try:
+            screenshot = pyautogui.screenshot(region=(left + x, top + y, w, h))
+            img_cv = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+            
+            if elixir_references:
+                results = []
+                for elixir_count, reference_img in elixir_references.items():
+                    try:
+                        processed_img = preprocess_elixir_image(img_cv)
+                        processed_ref = preprocess_elixir_image(reference_img)
+                        
+                        max_confidence = 0
+                        for scale in np.linspace(0.5, 1.5, 10):
+                            h_ref, w_ref = processed_ref.shape
+                            new_h, new_w = int(h_ref * scale), int(w_ref * scale)
+                            
+                            if new_h > processed_img.shape[0] or new_w > processed_img.shape[1]:
+                                continue
+                            
+                            resized_ref = cv2.resize(processed_ref, (new_w, new_h))
+                            result = cv2.matchTemplate(processed_img, resized_ref, cv2.TM_CCOEFF_NORMED)
+                            _, confidence, _, _ = cv2.minMaxLoc(result)
+                            max_confidence = max(max_confidence, confidence)
+                        
+                        results.append((elixir_count, max_confidence))
+                        
+                    except Exception as e:
+                        results.append((elixir_count, 0))
+                
+                results.sort(key=lambda x: x[1], reverse=True)
+                best_match = results[0]
+                
+                final_message += f"Best match: {best_match[0]}E (confidence: {best_match[1]:.3f})\n"
+                if best_match[1] > 0.6:
+                    final_message += "✓ Good match found!"
+                else:
+                    final_message += "✗ Poor match - consider adjusting ROI"
+            
+        except Exception as e:
+            final_message += f"Error testing: {str(e)}"
+        
+        messagebox.showinfo("Calibration Complete", final_message)
         win.destroy()
+    
     canvas.bind("<Button-1>", on_down)
     canvas.bind("<B1-Motion>", on_drag)
     canvas.bind("<ButtonRelease-1>", on_up)
     win.image = img
 
-# Card ROI calibration
+# Card ROI calibration with scrolling
 def visual_calibrate_cards():
     global calibrated_cards_roi
     if not selected_window:
         messagebox.showwarning("Warning", "Please select a window first!")
         return
+    
     left, top, width, height = selected_window.left, selected_window.top, selected_window.width, selected_window.height
     screenshot = pyautogui.screenshot(region=(left, top, width, height))
     img = ImageTk.PhotoImage(screenshot)
+    
     win = tk.Toplevel(root)
     win.title("Select Card ROI")
-    canvas = tk.Canvas(win, width=width, height=height, cursor="cross")
-    canvas.pack()
-    canvas.create_image(0,0,anchor=tk.NW, image=img)
+    win.geometry("800x600")
+    
+    # Create main frame
+    main_frame = tk.Frame(win)
+    main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+    
+    # Create canvas with scrollbars
+    canvas_container = tk.Frame(main_frame)
+    canvas_container.pack(fill="both", expand=True)
+    
+    # Create scrollbars
+    h_scrollbar = tk.Scrollbar(canvas_container, orient="horizontal")
+    v_scrollbar = tk.Scrollbar(canvas_container, orient="vertical")
+    
+    # Create canvas with scrollbars
+    canvas = tk.Canvas(canvas_container, 
+                      width=min(width, 700), 
+                      height=min(height, 500),
+                      cursor="cross",
+                      xscrollcommand=h_scrollbar.set,
+                      yscrollcommand=v_scrollbar.set)
+    
+    # Configure scrollbars
+    h_scrollbar.config(command=canvas.xview)
+    v_scrollbar.config(command=canvas.yview)
+    
+    # Pack scrollbars and canvas
+    h_scrollbar.pack(side="bottom", fill="x")
+    v_scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+    
+    # Add image to canvas
+    canvas.create_image(0, 0, anchor=tk.NW, image=img)
+    canvas.config(scrollregion=canvas.bbox("all"))
+    
     coords = [0,0]
     rect = None
+    
     def on_down(e):
         nonlocal rect
         coords[0], coords[1] = e.x, e.y
         if rect: canvas.delete(rect)
         rect = canvas.create_rectangle(e.x,e.y,e.x,e.y, outline='red', width=2)
+    
     def on_drag(e):
         canvas.coords(rect, coords[0], coords[1], e.x, e.y)
+    
     def on_up(e):
         x0,y0 = coords
         x1,y1 = e.x, e.y
@@ -541,6 +793,7 @@ def visual_calibrate_cards():
         print(f"Cards ROI = {calibrated_cards_roi}")
         messagebox.showinfo("Success", f"Card ROI calibrated: {calibrated_cards_roi}")
         win.destroy()
+    
     canvas.bind("<Button-1>", on_down)
     canvas.bind("<B1-Motion>", on_drag)
     canvas.bind("<ButtonRelease-1>", on_up)
@@ -664,8 +917,18 @@ def select_window():
 
 window_frame = tk.LabelFrame(root, text="Window Selection")
 window_frame.pack(fill="x", padx=10, pady=5)
-window_listbox = tk.Listbox(window_frame, height=4)
-window_listbox.pack(fill="x", pady=5)
+
+# Create listbox with scrollbar
+listbox_frame = tk.Frame(window_frame)
+listbox_frame.pack(fill="x", pady=5)
+
+listbox_scrollbar = tk.Scrollbar(listbox_frame)
+window_listbox = tk.Listbox(listbox_frame, height=4, yscrollcommand=listbox_scrollbar.set)
+
+listbox_scrollbar.config(command=window_listbox.yview)
+listbox_scrollbar.pack(side="right", fill="y")
+window_listbox.pack(side="left", fill="x", expand=True)
+
 btn_frame = tk.Frame(window_frame)
 tk.Button(btn_frame, text="Refresh", command=refresh_windows).pack(side="left")
 tk.Button(btn_frame, text="Select", command=select_window).pack(side="left")
@@ -719,8 +982,18 @@ setup_automation_panel()
 def setup_status_panel():
     frame = tk.LabelFrame(root, text="Status")
     frame.pack(fill="x", padx=10, pady=5)
-    status_text = tk.Text(frame, height=8, width=80)
-    status_text.pack(fill="both", expand=True)
+    
+    # Create text widget with scrollbar
+    text_frame = tk.Frame(frame)
+    text_frame.pack(fill="both", expand=True)
+    
+    text_scrollbar = tk.Scrollbar(text_frame)
+    status_text = tk.Text(text_frame, height=8, width=80, yscrollcommand=text_scrollbar.set)
+    
+    text_scrollbar.config(command=status_text.yview)
+    text_scrollbar.pack(side="right", fill="y")
+    status_text.pack(side="left", fill="both", expand=True)
+    
     status_text.insert(tk.END, "=== Card Placer Ready ===\n")
     status_text.insert(tk.END, "1. Select a window\n")
     status_text.insert(tk.END, "2. Calibrate elixir ROI and test\n")
